@@ -1,2 +1,13 @@
-*/.venv/*
+# Local environments and generated files
+.venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.log
 *preview.json
+.env
+.env.*
+
+# Private customer data
+/examples/
+/*.csv

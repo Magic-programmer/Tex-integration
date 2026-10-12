@@ -15,10 +15,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from aspro_export.api import ApiClient, ExportError
-from aspro_export.lookups import join_labels
-from aspro_export.output import Snapshot, write_csv
-from aspro_export.transform import transform, task_depths
+from export_aspro import ApiClient, ExportError
+from export_aspro import join_labels
+from export_aspro import Snapshot, write_csv
+from export_aspro import transform, task_depths
 
 REPORTS = ('Контрагенты', 'Сделки', 'Задачи')
 
@@ -190,7 +190,7 @@ def main():
     os.umask(0o077)
     args.cache.mkdir(parents=True, exist_ok=True)
     logging.getLogger('urllib3').setLevel(logging.CRITICAL)
-    config = json.loads((Path(__file__).resolve().parents[1]/'config/reports.json').read_text())
+    config = json.loads((Path(__file__).resolve().parents[1]/'reports.json').read_text())
     if args.download:
         key = os.environ.get('ASPRO_API_KEY')
         if not key:

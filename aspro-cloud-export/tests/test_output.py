@@ -2,9 +2,9 @@ import csv
 
 import pytest
 
-from aspro_export.api import ExportError
-from aspro_export.output import Snapshot, validate_csv, write_csv
-from aspro_export.__main__ import run, validate_config
+from export_aspro import ExportError
+from export_aspro import Snapshot, validate_csv, write_csv
+from export_aspro import run, validate_config
 
 
 def test_csv_bom_quoting_and_newlines(tmp_path):

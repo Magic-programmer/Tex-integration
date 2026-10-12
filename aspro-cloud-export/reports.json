@@ -1,0 +1,85 @@
+{
+  "base_url": "https://gktex.aspro.cloud",
+  "lookups": {
+    "users": {"path": "core/user/list", "label": "name", "params": {"order_by[asc][]": "id"}, "get_path": "core/user/get/{id}", "unavailable_label": "id"},
+    "categories": {"path": "crm/account_category/list", "label": "name", "params": {"order_by[asc][]": "id"}},
+    "accounts": {"path": "crm/account/list", "label": "name", "params": {"order_by[asc][]": "id"}, "get_path": "crm/account/get/{id}"},
+    "stages": {"path": "crm/pipeline_stage/list", "label": "name", "params": {"order_by[asc][]": "id"}},
+    "sources": {"path": "crm/source/list", "label": "name", "params": {"order_by[asc][]": "id"}},
+    "pipelines": {"path": "crm/pipeline/list", "label": "name", "params": {"order_by[asc][]": "id"}},
+    "loss_reasons": {"path": "crm/loss_reason/list", "label": "name", "params": {"order_by[asc][]": "id"}},
+    "projects": {"path": "st/projects/list", "label": "name", "params": {"order_by[asc][]": "id"}},
+    "emails": {"path": "crm/emails/list", "label": "email", "key": "account_id", "many": true, "separator": ", ", "params": {"order_by[asc][]": "id"}, "unique": true, "clean_email_list": true},
+    "companies": {"path": "crm/account/list", "label": "name", "params": {"order_by[asc][]": "id", "filter[type]": "1"}}
+  },
+  "reports": [
+    {
+      "name": "Контрагенты",
+      "filename": "Контрагенты.csv",
+      "path": "crm/account/list",
+      "params": {"order_by[asc][]": "id"},
+      "allow_empty": false,
+      "columns": [
+        {"header": "ИНН", "field": "VAT", "transform": "text"},
+        {"header": "Название", "field": "name", "transform": "text", "strip": true, "normalize_nbsp": true},
+        {"header": "Категория", "field": "account_category_id", "transform": "lookup", "lookup": "categories", "strip": true},
+        {"header": "Сайт", "field": "web", "transform": "text"},
+        {"header": "E-mail", "field": "id", "transform": "lookup", "lookup": "emails", "empty_if_missing": true, "strip": true},
+        {"header": "Город (Адрес регистрации)", "field": "billing_city", "transform": "text", "strip": true},
+        {"header": "Ответственный", "field": "owner_id", "transform": "lookup", "lookup": "users", "zero_record_labels": {"9": "Robot", "224": "Robot", "230": "Robot", "280": "Robot", "548": "Robot", "564": "Robot", "604": "Robot", "623": "Robot", "646": "Robot", "6809": "Robot", "7274": "Robot", "7341": "Robot", "9346": "Robot", "9722": "Robot", "9961": "Robot", "10252": "Robot", "10273": "Robot", "10363": "Robot", "10475": "Robot", "10584": "Robot", "10703": "Robot", "10855": "Robot", "11662": "Robot", "11663": "Robot", "11665": "Robot", "11667": "Robot", "11668": "Robot", "11669": "Robot", "11672": "Robot", "11677": "Robot", "11678": "Robot", "11679": "Robot", "11680": "Robot", "11682": "Robot", "11685": "Robot", "11686": "Robot", "11689": "Robot", "11690": "Robot", "11691": "Robot", "11692": "Robot", "11693": "Robot", "11694": "Robot", "11695": "Robot", "11696": "Robot", "11697": "Robot", "11699": "Robot", "11700": "Robot", "11701": "Robot", "11704": "Robot", "11708": "Robot", "11709": "Robot", "11710": "Robot", "11711": "Robot", "11713": "Robot", "11714": "Robot", "11715": "Robot", "11718": "Robot", "11719": "Robot", "11720": "Robot", "11721": "Robot"}},
+        {"header": "ID", "field": "id", "transform": "text"},
+        {"header": "Дата создания", "field": "created_date", "transform": "datetime"},
+        {"header": "Дата изменения", "field": "updated_date", "transform": "datetime"}
+      ]
+    },
+    {
+      "name": "Сделки",
+      "filename": "Сделки.csv",
+      "path": "crm/lead/list",
+      "params": {"order_by[asc][]": "id", "customfields": 1},
+      "allow_empty": false,
+      "columns": [
+        {"header": "Название", "field": "name", "transform": "text", "strip": true, "normalize_nbsp": true},
+        {"header": "Создана", "field": "created_date", "transform": "datetime"},
+        {"header": "Бюджет", "field": "budget", "transform": "money"},
+        {"header": "Этап сделки", "field": "pipeline_stage_id", "transform": "lookup", "lookup": "stages", "closed_labels": {"2": "Проиграна", "3": "Успешно закрыта", "4": "Приостановлена"}, "strip": true},
+        {"header": "Компания", "field": "company_id", "transform": "lookup", "lookup": "companies", "empty_if_missing": true, "blank_if_unpaired_quotes": true, "normalize_nbsp": true, "escape_apostrophe": true},
+        {"header": "Ответственный", "field": "assignee_id", "transform": "lookup", "lookup": "users"},
+        {"header": "Источник сделки", "field": "source_id", "transform": "lookup", "lookup": "sources"},
+        {"header": "Дата закрытия", "field": "closing_date", "transform": "date"},
+        {"header": "Воронка продаж", "field": "pipeline_id", "transform": "lookup", "lookup": "pipelines"},
+        {"header": "Статус", "field": "active", "transform": "enum", "values": {"1": "Активна", "2": "Проиграна", "3": "Успешно закрыта", "4": "Приостановлена"}},
+        {"header": "Причина отказа", "field": "closing_status_id", "transform": "lookup", "lookup": "loss_reasons", "only_active": "2"},
+        {"header": "Встречались", "field": "customfields", "transform": "custom", "custom_id": 4, "value_transform": "enum", "values": {"0": "Нет", "1": "Да"}, "empty_value": "Нет"},
+        {"header": "Город", "field": "customfields", "transform": "custom", "custom_id": 6, "strip": true},
+        {"header": "Агент", "field": "customfields", "transform": "custom", "custom_id": 1, "value_transform": "lookup", "lookup": "accounts"},
+        {"header": "Дата начала", "field": "start_date", "transform": "date"},
+        {"header": "Дата последней активности", "field": "last_activity_time", "transform": "datetime"},
+        {"header": "ID", "field": "id", "transform": "text"},
+        {"header": "Дела", "transform": "constant", "value": "", "evidence": "All 18532 supplied manual export rows are blank; validated presentation only, not an API activity count."}
+      ]
+    },
+    {
+      "name": "Задачи",
+      "filename": "Задачи.csv",
+      "path": "task/tasks/list",
+      "params": {"order_by[asc][]": "id", "filter[type]": "0", "filter[archive_status]": "0"},
+      "allow_empty": false,
+      "row_filters": {"archive_status": "0"},
+      "columns": [
+        {"header": "ID", "field": "id", "transform": "task_id"},
+        {"header": "Название", "field": "name", "transform": "text", "strip": true, "blank_if_unpaired_quotes": true, "normalize_nbsp": true, "escape_apostrophe": true},
+        {"header": "Статус", "field": "status", "transform": "enum", "values": {"1": "Не выполняется", "3": "В работе", "4": "Ожидает контроля", "5": "Завершена"}},
+        {"header": "Постановщик", "field": "owner_id", "transform": "lookup", "lookup": "users", "zero_record_labels": {"6957": "Robot", "6958": "Robot", "31777": "Robot", "48484": "Robot", "48738": "Robot", "48785": "Robot", "48826": "Robot", "48827": "Robot", "54478": "Robot"}},
+        {"header": "Ответственный", "field": "responsible_id", "transform": "lookup", "lookup": "users", "zero_record_labels": {"8458": "Robot", "8459": "Robot", "8460": "Robot", "8467": "Robot", "8470": "Robot", "8471": "Robot", "8473": "Robot", "8474": "Robot", "8490": "Robot", "8495": "Robot", "8505": "Robot", "8514": "Robot", "8520": "Robot", "8521": "Robot", "8524": "Robot", "8532": "Robot", "8541": "Robot", "8548": "Robot", "8551": "Robot", "8554": "Robot", "8565": "Robot", "8572": "Robot", "8575": "Robot", "8576": "Robot", "8585": "Robot", "8586": "Robot", "8587": "Robot", "8589": "Robot", "8592": "Robot", "8593": "Robot", "8604": "Robot", "8605": "Robot", "8614": "Robot", "8618": "Robot", "8623": "Robot", "8624": "Robot", "8626": "Robot", "8630": "Robot", "8646": "Robot", "8647": "Robot", "8648": "Robot", "8650": "Robot", "8657": "Robot", "8666": "Robot", "8667": "Robot", "8676": "Robot", "8680": "Robot", "8683": "Robot", "8686": "Robot", "8694": "Robot", "8699": "Robot", "8703": "Robot", "8705": "Robot", "8706": "Robot", "8709": "Robot", "8711": "Robot", "8716": "Robot", "8717": "Robot", "8722": "Robot"}},
+        {"header": "Дата создания", "field": "created_date", "transform": "datetime"},
+        {"header": "Крайний срок", "field": "deadline", "transform": "datetime"},
+        {"header": "Завершена", "field": "closed_date", "transform": "datetime"},
+        {"header": "Возвратов на доработку", "field": "return_count", "transform": "text", "blank_if_zero": true},
+        {"header": "Приоритет", "field": "priority", "transform": "enum", "values": {"0": "", "1": "Низкий", "2": "Средний", "3": "Высокий"}},
+        {"header": "Просроченность", "field": "deadline", "transform": "overdue_flag", "evidence": "Presentation reconstructed from closed_date > deadline with API seconds; checked against reference cases. Not a direct API field."},
+        {"header": "Проект", "field": "model_id", "transform": "project", "lookup": "projects", "strip": true}
+      ]
+    }
+  ]
+}

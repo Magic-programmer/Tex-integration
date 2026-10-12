@@ -2,7 +2,7 @@ import pytest
 import requests
 import ssl
 
-from aspro_export.api import ApiClient, ExportError
+from export_aspro import ApiClient, ExportError
 
 
 class Response:

@@ -1,7 +1,7 @@
 import pytest
 
-from aspro_export.api import ApiApplicationError, ExportError
-from aspro_export.lookups import LookupTable
+from export_aspro import ApiApplicationError, ExportError
+from export_aspro import LookupTable
 
 
 def test_individual_user_get_and_cache():
@@ -70,7 +70,7 @@ def test_id_fallback_for_empty_name_in_list():
 
 
 def test_email_list_cleanup_preserves_readable_original_values():
-    from aspro_export.lookups import join_labels
+    from export_aspro import join_labels
     spec = {'separator': ', ', 'unique': True, 'clean_email_list': True}
     assert join_labels([' INFO@EXAMPLE.INVALID ', '', '\ufeffinfo@example.invalid',
                         'INFO@EXAMPLE.INVALID', "'quoted@example.invalid'", '<bad@value>'], spec) == (

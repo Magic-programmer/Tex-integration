@@ -1,8 +1,8 @@
 import pytest
 
-from aspro_export.api import ExportError
-from aspro_export.transform import transform
-from aspro_export.transform import task_depths
+from export_aspro import ExportError
+from export_aspro import transform
+from export_aspro import task_depths
 
 
 def apply(value, kind="text", **kwargs):

@@ -2,7 +2,7 @@ import importlib.util
 from pathlib import Path
 
 import pytest
-from aspro_export.api import ExportError
+from export_aspro import ExportError
 
 spec = importlib.util.spec_from_file_location('full_check', Path(__file__).resolve().parents[1]/'tools/full_check.py')
 module = importlib.util.module_from_spec(spec)

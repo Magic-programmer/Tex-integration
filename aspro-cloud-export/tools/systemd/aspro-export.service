@@ -1,0 +1,9 @@
+[Unit]
+Description=Daily Aspro.Cloud CSV export
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/aspro-cloud-export
+ExecStart=%h/aspro-cloud-export/.venv/bin/python %h/aspro-cloud-export/export_aspro.py
+UMask=0077
+TimeoutStartSec=2h

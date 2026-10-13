@@ -57,16 +57,48 @@ CSV: UTF-8 с BOM, русские заголовки; запятая у перв
 E-mail сохраняет исходный текст; удаляются BOM, пустые элементы и точные дубли.
 Особенности ручного CSV, включая ID подзадач, настроены в reports.json.
 
-## Cron и Windows
+## Таймер systemd, cron и Windows
+
+На текущем Debian-сервере приложение установлено в
+`/home/aspro/aspro-cloud-export`, окружение — `.venv`. Пользовательский таймер
+`aspro-export.timer` запускает `aspro-export.service` ежедневно в **01:00
+Europe/Moscow**. Включён linger: запуск не зависит от открытого SSH-сеанса.
+Unit-файлы находятся в `~/.config/systemd/user/`; их исходники для установки
+сохранены в `tools/systemd/`.
+
+Установка таймера из каталога проекта (после настройки ключа и venv):
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp tools/systemd/aspro-export.* ~/.config/systemd/user/
+sudo loginctl enable-linger "$(id -un)"
+systemctl --user daemon-reload
+systemctl --user enable --now aspro-export.timer
+```
+
+Ручной запуск и диагностика:
+
+```bash
+systemctl --user start --no-block aspro-export.service
+systemctl --user status aspro-export.service --no-pager
+journalctl --user -u aspro-export.service -n 50 --no-pager
+systemctl --user list-timers aspro-export.timer --no-pager
+```
+
+Статус `activating (start)` означает, что полный экспорт ещё идёт. После
+успеха oneshot-сервис станет `inactive (dead)` с `Result=success`; при ошибке
+будет `failed`, предыдущая успешная выгрузка сохраняется. Логи — в journal.
+Таймер с `Persistent=true` также выполняет пропущенный запуск после включения
+сервера. Не включайте cron одновременно с таймером.
 
 Для 01:00 по Москве сервер должен работать в Europe/Moscow (`timedatectl`).
-В crontab пользователя сервиса, с фактическими путями:
+Если вместо таймера выбран cron, в crontab пользователя сервиса, с фактическими путями:
 
 ```cron
 0 1 * * * /путь/к/.venv/bin/python /путь/к/export_aspro.py >> /путь/к/export.log 2>&1
 ```
 
-Настройте права и ротацию журнала. Cron пока не включён. Доставка на Windows
+Для cron настройте права и ротацию журнала. Cron не включён. Доставка на Windows
 ещё не реализована: путь, сеть/VPN, протокол SMB3/SFTP и уведомления не согласованы.
 Локальный успех не означает доставку. Новый ключ даёт доступ к четвёртому отчёту «База ГПУ»: GET
 customlists/lists/3/items. Пагинация page/limit, count/total_result и

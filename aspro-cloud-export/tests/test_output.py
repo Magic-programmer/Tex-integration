@@ -103,3 +103,14 @@ def test_multiple_emails_preserve_order_and_empty_accounts(tmp_path):
     with (tmp_path / "current/report.csv").open(encoding="utf-8-sig", newline="") as handle:
         assert list(csv.reader(handle)) == [["E-mail"],
                 ["first@example.invalid, second@example.invalid"], [""]]
+
+
+def test_semicolon_report_is_validated_and_published(tmp_path):
+    snapshot = Snapshot(tmp_path)
+    headers = ['Тип', 'Серийный номер', 'Комментарий']
+    rows = [['7514.10-01', '81152198045162', '=literal; text\nnext line']]
+    write_csv(snapshot.stage/'gpu.csv', headers, rows, delimiter=';')
+    snapshot.commit([('gpu.csv', headers, 1, ';')])
+    snapshot.close()
+    with (tmp_path/'current/gpu.csv').open(encoding='utf-8-sig', newline='') as handle:
+        assert list(csv.reader(handle, delimiter=';')) == [headers, *rows]

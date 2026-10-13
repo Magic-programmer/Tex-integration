@@ -140,14 +140,11 @@ def test_only_read_methods(path):
     assert not session.calls
 
 
-def test_supplied_customlist_read_path_and_no_assumed_pagination():
+def test_supplied_customlist_read_path():
     api, session, _ = client([Response(data={"response": {"items": []}})])
     assert api.get("customlists/lists/3/items") == {"items": []}
     assert session.calls[0][0].endswith("/customlists/lists/3/items")
     assert set(session.calls[0][1]["params"]) == {"api_key"}
-    with pytest.raises(ExportError):
-        list(api.records("customlists/lists/3/items"))
-    assert len(session.calls) == 1
 
 
 def test_module_authorization_error_is_explicit_and_sanitized():
@@ -164,3 +161,12 @@ def test_customlist_write_or_malformed_paths_rejected(path):
     with pytest.raises(ExportError):
         api.get(path)
     assert not session.calls
+
+
+def test_customlist_uses_verified_standard_pagination():
+    api, session, _ = client([
+        Response(data={"response": {"page": 1, "count": 1, "total_result": 2, "items": [{"id": 1}]}}),
+        Response(data={"response": {"page": 2, "count": 1, "total_result": 2, "items": [{"id": 2}]}}),
+    ])
+    assert [r["id"] for r in api.records("customlists/lists/3/items")] == [1, 2]
+    assert len(session.calls) == 2

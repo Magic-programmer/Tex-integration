@@ -20,7 +20,7 @@ from export_aspro import join_labels
 from export_aspro import Snapshot, write_csv
 from export_aspro import transform, task_depths
 
-REPORTS = ('Контрагенты', 'Сделки', 'Задачи')
+REPORTS = ('Контрагенты', 'Сделки', 'Задачи', 'База ГПУ')
 
 
 def save(path, value):
@@ -76,8 +76,12 @@ def download(client, cache, name, path, params):
 def references(examples):
     result = {}
     for name in REPORTS:
-        with (examples / f'{name.lower()}.csv').open(encoding='utf-8-sig', newline='') as handle:
-            reader = csv.DictReader(handle)
+        filename = 'баз гпу.csv' if name == 'База ГПУ' else f'{name.lower()}.csv'
+        with (examples / filename).open(encoding='utf-8-sig', newline='') as handle:
+            reader = csv.DictReader(handle, delimiter=';' if name == 'База ГПУ' else ',')
+            if name == 'База ГПУ':
+                result[name] = (reader.fieldnames, list(reader))
+                continue
             rows = {}
             for row in reader:
                 identifier = re.sub(r'^(?:— )+', '', row['ID'])
@@ -88,13 +92,27 @@ def references(examples):
     return result
 
 
+def align_gpu_rows(records, reference):
+    if len(records) != len(reference):
+        raise ExportError('GPU row counts differ; reference alignment cannot be inferred')
+    pairs = {}
+    for record, expected in zip(sorted(records, key=lambda r: int(r['id'])), reference):
+        for field, header in [('cf_16', '№ пп'), ('cf_21', 'Адрес установки '),
+                              ('cf_22', 'Мощность ГПУ (кВт)')]:
+            if str(record.get(field) or '').strip() != expected[header].strip():
+                raise ExportError('GPU reference order/anchors differ; obtain a current sample')
+        pairs[str(record['id'])] = expected
+    return pairs
+
+
 def render(config, cache, output, examples, labels_file):
     reports = [r for r in config['reports'] if r['name'] in REPORTS]
     raw_accounts = json.loads((cache / 'Контрагенты.json').read_text())
     lookups = {}
     supplemental = json.loads(labels_file.read_text()) if labels_file.exists() else {}
     for name, spec in config['lookups'].items():
-        records = raw_accounts if name in ('accounts', 'companies') else json.loads((cache / f'{name}.json').read_text())
+        records = (raw_accounts if name in ('accounts', 'companies') else
+                   json.loads((cache / ('Сделки.json' if name == 'leads' else f'{name}.json')).read_text()))
         values = {}
         for row in records:
             if name == 'companies' and str(row.get('type')) != '1':
@@ -144,6 +162,8 @@ def render(config, cache, output, examples, labels_file):
                         for k, v in report['row_filters'].items())]
             if name == 'Задачи':
                 lookups['task_depths'] = task_depths(rows)
+            if name == 'База ГПУ':
+                expected[name] = (expected[name][0], align_gpu_rows(rows, expected[name][1]))
             rendered, seen, counts, changed = [], set(), Counter(), 0
             for record in rows:
                 identifier = str(record['id'])
@@ -160,14 +180,16 @@ def render(config, cache, output, examples, labels_file):
                                                 'actual': value, 'expected': reference[column]})
                 changed += different
                 rendered.append([actual[c] for c in headers])
-            count = write_csv(snapshot.stage / report['filename'], headers, rendered)
-            completed.append((report['filename'], headers, count))
+            count = write_csv(snapshot.stage / report['filename'], headers, rendered, report.get('delimiter', ','))
+            completed.append((report['filename'], headers, count, report.get('delimiter', ',')))
             reference_ids = set(expected[name][1])
             summary = {'report': name, 'api_rows': count, 'reference_rows': len(reference_ids),
                        'common_ids': len(seen & reference_ids), 'api_only_ids': len(seen - reference_ids),
                        'reference_only_ids': len(reference_ids - seen), 'differing_rows': changed,
                        'differing_cells': sum(counts.values()), 'columns': dict(counts)}
             summaries.append(summary)
+            if name == 'База ГПУ':
+                summary['comparison'] = 'Row order checked by sequence number, address and power; sample has no ID column'
             save(cache / f'{name}-missing-ids.json', sorted(reference_ids - seen))
             save(cache / f'{name}-extra-ids.json', sorted(seen - reference_ids))
             print(json.dumps(summary, ensure_ascii=False), flush=True)
@@ -202,7 +224,7 @@ def main():
                 if report['name'] in REPORTS:
                     download(client, args.cache, report['name'], report['path'], report.get('params', {}))
             for name, spec in config['lookups'].items():
-                if name not in ('accounts', 'companies'):
+                if name not in ('accounts', 'companies', 'leads'):
                     download(client, args.cache, name, spec['path'], spec.get('params', {}))
         finally:
             client.session.close()

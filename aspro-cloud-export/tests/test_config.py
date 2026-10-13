@@ -9,11 +9,11 @@ from export_aspro import validate_config
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_default_configuration_has_three_ready_reports():
+def test_default_configuration_has_four_ready_reports():
     config = json.loads((ROOT/'reports.json').read_text())
     reports = validate_config(config, None)
-    assert [r['name'] for r in reports] == ['Контрагенты', 'Сделки', 'Задачи']
-    assert [len(r['columns']) for r in reports] == [10, 18, 12]
+    assert [r['name'] for r in reports] == ['Контрагенты', 'Сделки', 'Задачи', 'База ГПУ']
+    assert [len(r['columns']) for r in reports] == [10, 18, 12, 44]
     for report in reports:
         assert len({c['header'] for c in report['columns']}) == len(report['columns'])
         for col in report['columns']:
@@ -23,8 +23,7 @@ def test_default_configuration_has_three_ready_reports():
 
 
 def test_pending_gpu_cannot_be_started_without_schema():
-    config = json.loads((ROOT/'tests/fixtures/pending-gpu.json').read_text())
-    assert len(config['reports'][0]['columns']) == 44
+    config = {'reports': [{'name': 'Pending', 'unresolved': 'Schema unavailable'}]}
     with pytest.raises(ExportError, match='source unresolved'):
         validate_config(config, None)
 

@@ -43,3 +43,16 @@ def test_duplicate_pages_do_not_mark_complete(tmp_path):
     with pytest.raises(ExportError):
         module.download(client, tmp_path, 'sample', 'crm/account/list', {})
     assert not (tmp_path/'sample/complete.json').exists()
+
+
+def test_gpu_alignment_requires_count_and_anchor_matches():
+    records = [{'id': 2, 'cf_16': '20', 'cf_21': 'Synthetic address B', 'cf_22': '200'},
+               {'id': 1, 'cf_16': '10', 'cf_21': 'Synthetic address A', 'cf_22': '100'}]
+    reference = [{'№ пп': '10', 'Адрес установки ': 'Synthetic address A', 'Мощность ГПУ (кВт)': '100'},
+                 {'№ пп': '20', 'Адрес установки ': 'Synthetic address B', 'Мощность ГПУ (кВт)': '200'}]
+    assert set(module.align_gpu_rows(records, reference)) == {'1', '2'}
+    with pytest.raises(ExportError):
+        module.align_gpu_rows(records, reference[:1])
+    reference[1]['Адрес установки '] = 'Changed address'
+    with pytest.raises(ExportError):
+        module.align_gpu_rows(records, reference)

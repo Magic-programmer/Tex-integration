@@ -116,3 +116,10 @@ def test_loss_reason_only_for_lost_lead():
     column = {"header": "Reason", "field": "reason", "only_active": "2"}
     assert transform({"active": 1, "reason": "Synthetic"}, column, {}) == ""
     assert transform({"active": 2, "reason": "Synthetic"}, column, {}) == "Synthetic"
+
+
+def test_gpu_serial_and_creation_time_are_not_coerced_by_excel():
+    assert apply('81152198045162') == '81152198045162'
+    assert apply('260 1907 010 0001') == '260 1907 010 0001'
+    assert apply('7514.10-01') == '7514.10-01'
+    assert apply('2025-11-18 09:37:00', 'datetime', hour_unpadded=True) == '18.11.2025 9:37'

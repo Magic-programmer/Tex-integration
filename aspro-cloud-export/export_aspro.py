@@ -145,8 +145,6 @@ class ApiClient:
             return result
 
     def records(self, path, params=None):
-        if re.fullmatch(r"customlists/lists/[0-9]+/items", path):
-            raise ExportError("Customlist items response and pagination schema are not yet confirmed")
         params = dict(params or {})
         if "page" in params or "limit" in params or "api_key" in params:
             raise ExportError("Pagination and authentication are managed by the client")
@@ -253,9 +251,9 @@ def sha256_file(path):
     return digest.hexdigest()
 
 
-def write_csv(path, headers, rows):
+def write_csv(path, headers, rows, delimiter=","):
     with Path(path).open("w", encoding="utf-8-sig", newline="") as handle:
-        writer = csv.writer(handle, delimiter=",", lineterminator="\n")
+        writer = csv.writer(handle, delimiter=delimiter, lineterminator="\n")
         writer.writerow(headers)
         count = 0
         for row in rows:
@@ -268,9 +266,9 @@ def write_csv(path, headers, rows):
     return count
 
 
-def validate_csv(path, headers, count):
+def validate_csv(path, headers, count, delimiter=","):
     with Path(path).open(encoding="utf-8-sig", newline="") as handle:
-        reader = csv.reader(handle)
+        reader = csv.reader(handle, delimiter=delimiter)
         if next(reader, None) != headers:
             raise ExportError("CSV header validation failed")
         actual = 0
@@ -294,9 +292,11 @@ class Snapshot:
 
     def commit(self, reports):
         manifest = {"reports": []}
-        for name, headers, count in reports:
+        for report in reports:
+            name, headers, count = report[:3]
+            delimiter = report[3] if len(report) > 3 else ","
             path = self.stage / name
-            validate_csv(path, headers, count)
+            validate_csv(path, headers, count, delimiter)
             manifest["reports"].append({"file": name, "rows": count,
                 "sha256": sha256_file(path)})
         if not reports:
@@ -405,10 +405,10 @@ def transform(record, column, lookups):
             if column.get("empty_if_missing"):
                 return ""
             raise ExportError("Missing related record for column: " + column["header"]) from None
-    elif kind == "enum":
+    elif kind in ("enum", "reference_labels"):
         values = column["values"]
         if str(value) not in values:
-            raise ExportError("Unknown enum value for column: " + column["header"])
+            raise ExportError("Unknown enum value or reference ID for column: " + column["header"])
         value = values[str(value)]
     elif kind in ("date", "datetime"):
         if value in ("0000-00-00", "0000-00-00 00:00:00"):
@@ -418,6 +418,8 @@ def transform(record, column, lookups):
             if parsed.tzinfo is not None:
                 parsed = parsed.astimezone(ZoneInfo("Europe/Moscow"))
             value = parsed.strftime("%d.%m.%Y" if kind == "date" else "%d.%m.%Y %H:%M")
+            if kind == "datetime" and column.get("hour_unpadded"):
+                value = parsed.strftime("%d.%m.%Y ") + str(parsed.hour) + parsed.strftime(":%M")
         except (ValueError, TypeError):
             raise ExportError("Invalid date for column: " + column["header"]) from None
     elif kind in ("decimal", "money"):
@@ -460,6 +462,8 @@ def validate_config(config, selected):
         if report.get("unresolved"):
             raise ExportError("Report API source unresolved: " + report["name"])
         filename = report["filename"]
+        if report.get("delimiter", ",") not in (",", ";"):
+            raise ExportError("Unsupported CSV delimiter")
         if Path(filename).name != filename or filename in filenames:
             raise ExportError("Invalid or duplicate output filename")
         filenames.add(filename)
@@ -528,10 +532,11 @@ def run(config, reports, output, client):
             rows = ([transform(item, c, lookups) for c in columns]
                     for item in items)
             count = write_csv(snapshot.stage / report["filename"],
-                              [c["header"] for c in columns], rows)
+                              [c["header"] for c in columns], rows, report.get("delimiter", ","))
             if count == 0 and not report.get("allow_empty", False):
                 raise ExportError("Empty report requires explicit allow_empty: " + report["name"])
-            completed.append((report["filename"], [c["header"] for c in columns], count))
+            completed.append((report["filename"], [c["header"] for c in columns], count,
+                              report.get("delimiter", ",")))
             log.info("Report %s validated: %d records", report["name"], count)
         snapshot.commit(completed)
         log.info("Snapshot published locally; Windows delivery is not configured")

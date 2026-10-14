@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import ssl
+import subprocess
 import tempfile
 import time
 import uuid
@@ -539,9 +540,110 @@ def run(config, reports, output, client):
                               report.get("delimiter", ",")))
             log.info("Report %s validated: %d records", report["name"], count)
         snapshot.commit(completed)
-        log.info("Snapshot published locally; Windows delivery is not configured")
+        log.info("Snapshot published locally")
     finally:
         snapshot.close()
+
+
+def smb_quote(value):
+    value = str(value)
+    if any(c in value for c in ['"', ';', '\r', '\n', '\x00']):
+        raise ExportError("Unsafe SMB path")
+    return '"' + value + '"'
+
+
+class SmbDelivery:
+    """Encrypted SMB3; validate uploads before replacing individual reports."""
+    def __init__(self, settings, *, execute=subprocess.run, sleep=time.sleep):
+        self.share = settings.get("share", "")
+        directory = settings.get("directory", "")
+        if not re.fullmatch(r"//[A-Za-z0-9._-]+/[A-Za-z0-9_$.-]+", self.share):
+            raise ExportError("Invalid SMB share")
+        parts = directory.replace('\\', '/').split('/')
+        if not parts or any(p in ('', '.', '..') for p in parts):
+            raise ExportError("Invalid SMB directory")
+        self.directory = '\\' + '\\'.join(parts)
+        smb_quote(self.directory)
+        self.credentials = Path(os.environ.get("ASPRO_SMB_CREDENTIALS_FILE", str(Path.home()/".config/aspro-export/smb-credentials")))
+        self.execute, self.sleep = execute, sleep
+
+    def remote(self, name):
+        if Path(name).name != name or any(c in name for c in '*?\\'):
+            raise ExportError("Invalid SMB filename")
+        return smb_quote(self.directory + '\\' + name)
+
+    def command(self, command, *, attempts=3):
+        args = ['smbclient', self.share, '-A', str(self.credentials),
+                '--option=client min protocol=SMB3', '--client-protection=encrypt',
+                '-t', '30', '-c', command]
+        for attempt in range(attempts):
+            try:
+                result = self.execute(args, capture_output=True, timeout=180)
+                success = result.returncode == 0 and b'NT_STATUS_' not in result.stdout + result.stderr
+            except (OSError, subprocess.TimeoutExpired):
+                success = False
+            if success:
+                return
+            if attempt + 1 < attempts:
+                log.warning("Temporary SMB operation failure; retry %d/%d", attempt + 1, attempts)
+                self.sleep(2 ** attempt)
+        raise ExportError("SMB operation failed; destination may contain the previous or mixed generations; retry delivery")
+
+    def deliver(self, output, reports):
+        info = self.credentials.stat()
+        if info.st_uid != os.getuid() or info.st_mode & 0o777 != 0o600:
+            raise ExportError("SMB credentials must be owned by this user with permissions 600")
+        root = (Path(output)/'current').resolve(strict=True)
+        manifest = json.loads((root/'manifest.json').read_text())
+        entries = manifest.get('reports', [])
+        expected = {r['filename']:r for r in reports}
+        if len(entries) != len(expected) or {e['file'] for e in entries} != set(expected):
+            raise ExportError("Delivery requires the complete configured report set")
+        files = []
+        for entry in entries:
+            name = entry['file']
+            report = expected[name]
+            path = root/name
+            validate_csv(path, [c['header'] for c in report['columns']], entry['rows'], report.get('delimiter', ','))
+            if entry['rows'] == 0 and not report.get('allow_empty', False):
+                raise ExportError("Empty report cannot be delivered")
+            if sha256_file(path) != entry['sha256']:
+                raise ExportError("Local delivery checksum mismatch")
+            files.append((name, path, entry['sha256']))
+        files.append(('manifest.json', root/'manifest.json', sha256_file(root/'manifest.json')))
+        token = uuid.uuid4().hex
+        staged = []
+        pending = set()
+        with tempfile.TemporaryDirectory(prefix='.smb-check-', dir=output) as temporary:
+            check = Path(temporary)/'download'
+            try:
+                for name, path, checksum in files:
+                    remote_name = '.aspro-' + token + '-' + name + '.tmp'
+                    staged.append(remote_name)
+                    pending.add(remote_name)
+                    self.command('put ' + smb_quote(path) + ' ' + self.remote(remote_name))
+                    self.command('get ' + self.remote(remote_name) + ' ' + smb_quote(check))
+                    if sha256_file(check) != checksum:
+                        raise ExportError("Uploaded SMB file checksum mismatch")
+                for (name, path, checksum), remote_name in zip(files, staged):
+                    try:
+                        self.command('rename ' + self.remote(remote_name) + ' ' + self.remote(name) + ' -f', attempts=1)
+                    except ExportError:
+                        # A lost response can leave an already completed rename.
+                        self.command('get ' + self.remote(name) + ' ' + smb_quote(check))
+                        if sha256_file(check) != checksum:
+                            raise ExportError("SMB replacement failed; retry delivery") from None
+                    self.command('get ' + self.remote(name) + ' ' + smb_quote(check))
+                    if sha256_file(check) != checksum:
+                        raise ExportError("Published SMB file checksum mismatch; retry delivery")
+                    pending.discard(remote_name)
+                log.info("Windows delivery completed: %d reports; remote checksums verified", len(reports))
+            finally:
+                for remote_name in pending:
+                    try:
+                        self.command('del ' + self.remote(remote_name), attempts=1)
+                    except ExportError:
+                        pass  # Already renamed, or unavailable; never delete final files.
 
 
 def api_key():
@@ -562,6 +664,7 @@ def main():
     parser.add_argument("--output", default=str(Path.home()/".local/state/aspro-export/exported"))
     parser.add_argument("--report", action="append", help="Select a report by configuration name")
     parser.add_argument("--check-config", action="store_true")
+    parser.add_argument("--deliver-only", action="store_true", help="Deliver the existing complete snapshot without API requests")
     args = parser.parse_args()
     os.umask(0o077)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -570,6 +673,11 @@ def main():
     try:
         config = json.loads(Path(args.config).read_text(encoding="utf-8"))
         reports = validate_config(config, args.report)
+        delivery = SmbDelivery(config['delivery']) if config.get('delivery') else None
+        if delivery and args.report:
+            raise ExportError("Select individual reports only with a configuration without Windows delivery")
+        if args.deliver_only and not delivery:
+            raise ExportError("Windows delivery is not configured")
         if args.check_config:
             log.info("Configuration valid: %d reports", len(reports))
             return 0
@@ -580,13 +688,18 @@ def main():
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
                 raise ExportError("Another export is running") from None
-            client = ApiClient(os.environ.get("ASPRO_BASE_URL", config.get("base_url", "")),
-                               api_key(),
-                               interval=float(os.environ.get("ASPRO_REQUEST_INTERVAL", "1.1")))
-            try:
-                run(config, reports, output, client)
-            finally:
-                client.session.close()
+            if not args.deliver_only:
+                client = ApiClient(os.environ.get("ASPRO_BASE_URL", config.get("base_url", "")),
+                                   api_key(),
+                                   interval=float(os.environ.get("ASPRO_REQUEST_INTERVAL", "1.1")))
+                try:
+                    run(config, reports, output, client)
+                finally:
+                    client.session.close()
+            if delivery:
+                delivery.deliver(output, reports)
+            else:
+                log.info("Windows delivery is not configured")
         return 0
     except ExportError as error:
         log.error("%s", error)

@@ -19,7 +19,8 @@
       "name": "Контрагенты",
       "filename": "Контрагенты.csv",
       "path": "crm/account/list",
-      "params": {"order_by[asc][]": "id"},
+      "params": {"order_by[asc][]": "id", "filter[type]": "1"},
+      "row_filters": {"type": "1"},
       "allow_empty": false,
       "columns": [
         {"header": "ИНН", "field": "VAT", "transform": "text"},

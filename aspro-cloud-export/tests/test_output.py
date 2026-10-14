@@ -56,6 +56,21 @@ def test_midstream_failure_does_not_publish(tmp_path):
     assert not list((tmp_path / "generations").glob(".pending-*"))
 
 
+def test_companies_only_excludes_contacts_even_if_api_ignores_filter(tmp_path):
+    class Client:
+        def records(self, path, params=None):
+            assert params['filter[type]'] == '1'
+            yield {'id':1,'type':'1'}
+            yield {'id':2,'type':'2'}
+            yield {'id':3,'type':1}
+    report = {'name':'Контрагенты','filename':'Контрагенты.csv','path':'crm/account/list',
+              'params':{'filter[type]':'1'},'row_filters':{'type':'1'},
+              'columns':[{'header':'ID','field':'id'}]}
+    run({'lookups':{}},[report],tmp_path,Client())
+    with (tmp_path/'current/Контрагенты.csv').open(encoding='utf-8-sig',newline='') as handle:
+        assert list(csv.reader(handle)) == [['ID'],['1'],['3']]
+
+
 def test_second_report_failure_does_not_publish_first_report(tmp_path):
     publish(tmp_path, "previous")
     class Client:

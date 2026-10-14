@@ -107,7 +107,8 @@ def align_gpu_rows(records, reference):
 
 def render(config, cache, output, examples, labels_file):
     reports = [r for r in config['reports'] if r['name'] in REPORTS]
-    raw_accounts = json.loads((cache / 'Контрагенты.json').read_text())
+    account_source = cache / 'accounts.json'
+    raw_accounts = json.loads((account_source if account_source.exists() else cache / 'Контрагенты.json').read_text())
     lookups = {}
     supplemental = json.loads(labels_file.read_text()) if labels_file.exists() else {}
     for name, spec in config['lookups'].items():
@@ -224,7 +225,7 @@ def main():
                 if report['name'] in REPORTS:
                     download(client, args.cache, report['name'], report['path'], report.get('params', {}))
             for name, spec in config['lookups'].items():
-                if name not in ('accounts', 'companies', 'leads'):
+                if name not in ('companies', 'leads'):
                     download(client, args.cache, name, spec['path'], spec.get('params', {}))
         finally:
             client.session.close()

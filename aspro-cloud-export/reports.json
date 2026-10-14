@@ -1,6 +1,6 @@
 {
   "base_url": "https://gktex.aspro.cloud",
-  "delivery": {"share": "//10.201.0.201/d", "directory": "Work/Руководство/Контролинг/CRM"},
+  "delivery": {"share": "//10.201.0.201/d", "directory": "Work/Руководство/Контролинг/CRM", "report_subdirectories": {"Контрагенты.csv": "Контрагенты", "Сделки.csv": "Сделки", "Задачи.csv": "Задачи", "База ГПУ.csv": "База ГПУ"}},
   "lookups": {
     "users": {"path": "core/user/list", "label": "name", "params": {"order_by[asc][]": "id"}, "get_path": "core/user/get/{id}", "unavailable_label": "id"},
     "categories": {"path": "crm/account_category/list", "label": "name", "params": {"order_by[asc][]": "id"}},

@@ -564,13 +564,20 @@ class SmbDelivery:
             raise ExportError("Invalid SMB directory")
         self.directory = '\\' + '\\'.join(parts)
         smb_quote(self.directory)
+        self.subdirectories = settings.get('report_subdirectories', {})
+        if not isinstance(self.subdirectories, dict):
+            raise ExportError("Invalid SMB report subdirectories")
+        for name, folder in self.subdirectories.items():
+            self.remote(name, folder)
         self.credentials = Path(os.environ.get("ASPRO_SMB_CREDENTIALS_FILE", str(Path.home()/".config/aspro-export/smb-credentials")))
         self.execute, self.sleep = execute, sleep
 
-    def remote(self, name):
+    def remote(self, name, folder=''):
         if Path(name).name != name or any(c in name for c in '*?\\'):
             raise ExportError("Invalid SMB filename")
-        return smb_quote(self.directory + '\\' + name)
+        if not isinstance(folder, str) or (folder and (folder in ('.', '..') or any(c in folder for c in '/\\:*?'))):
+            raise ExportError("Invalid SMB report subdirectory")
+        return smb_quote(self.directory + ('\\' + folder if folder else '') + '\\' + name)
 
     def command(self, command, *, attempts=3):
         args = ['smbclient', self.share, '-A', str(self.credentials),
@@ -599,6 +606,8 @@ class SmbDelivery:
         expected = {r['filename']:r for r in reports}
         if len(entries) != len(expected) or {e['file'] for e in entries} != set(expected):
             raise ExportError("Delivery requires the complete configured report set")
+        if set(self.subdirectories) - set(expected):
+            raise ExportError("SMB subdirectory mapping contains an unknown report")
         files = []
         for entry in entries:
             name = entry['file']
@@ -609,39 +618,42 @@ class SmbDelivery:
                 raise ExportError("Empty report cannot be delivered")
             if sha256_file(path) != entry['sha256']:
                 raise ExportError("Local delivery checksum mismatch")
-            files.append((name, path, entry['sha256']))
-        files.append(('manifest.json', root/'manifest.json', sha256_file(root/'manifest.json')))
+            files.append((name, path, entry['sha256'], self.subdirectories.get(name, '')))
         token = uuid.uuid4().hex
         staged = []
         pending = set()
         with tempfile.TemporaryDirectory(prefix='.smb-check-', dir=output) as temporary:
             check = Path(temporary)/'download'
+            delivery_manifest = Path(temporary)/'manifest.json'
+            remote_entries = [{**entry, 'file': (self.subdirectories[entry['file']] + '/' if self.subdirectories.get(entry['file']) else '') + entry['file']} for entry in entries]
+            delivery_manifest.write_text(json.dumps({'reports': remote_entries}, ensure_ascii=False, indent=2), encoding='utf-8')
+            files.append(('manifest.json', delivery_manifest, sha256_file(delivery_manifest), ''))
             try:
-                for name, path, checksum in files:
+                for name, path, checksum, folder in files:
                     remote_name = '.aspro-' + token + '-' + name + '.tmp'
-                    staged.append(remote_name)
-                    pending.add(remote_name)
-                    self.command('put ' + smb_quote(path) + ' ' + self.remote(remote_name))
-                    self.command('get ' + self.remote(remote_name) + ' ' + smb_quote(check))
+                    staged.append((remote_name, folder))
+                    pending.add((remote_name, folder))
+                    self.command('put ' + smb_quote(path) + ' ' + self.remote(remote_name, folder))
+                    self.command('get ' + self.remote(remote_name, folder) + ' ' + smb_quote(check))
                     if sha256_file(check) != checksum:
                         raise ExportError("Uploaded SMB file checksum mismatch")
-                for (name, path, checksum), remote_name in zip(files, staged):
+                for (name, path, checksum, folder), (remote_name, _) in zip(files, staged):
                     try:
-                        self.command('rename ' + self.remote(remote_name) + ' ' + self.remote(name) + ' -f', attempts=1)
+                        self.command('rename ' + self.remote(remote_name, folder) + ' ' + self.remote(name, folder) + ' -f', attempts=1)
                     except ExportError:
                         # A lost response can leave an already completed rename.
-                        self.command('get ' + self.remote(name) + ' ' + smb_quote(check))
+                        self.command('get ' + self.remote(name, folder) + ' ' + smb_quote(check))
                         if sha256_file(check) != checksum:
                             raise ExportError("SMB replacement failed; retry delivery") from None
-                    self.command('get ' + self.remote(name) + ' ' + smb_quote(check))
+                    self.command('get ' + self.remote(name, folder) + ' ' + smb_quote(check))
                     if sha256_file(check) != checksum:
                         raise ExportError("Published SMB file checksum mismatch; retry delivery")
-                    pending.discard(remote_name)
+                    pending.discard((remote_name, folder))
                 log.info("Windows delivery completed: %d reports; remote checksums verified", len(reports))
             finally:
-                for remote_name in pending:
+                for remote_name, folder in pending:
                     try:
-                        self.command('del ' + self.remote(remote_name), attempts=1)
+                        self.command('del ' + self.remote(remote_name, folder), attempts=1)
                     except ExportError:
                         pass  # Already renamed, or unavailable; never delete final files.
 

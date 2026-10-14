@@ -79,6 +79,25 @@ def test_verified_files_replace_old_reports_and_manifest_last(setup_delivery):
         assert 'synthetic' not in ' '.join(args)
 
 
+def test_report_subdirectories_and_remote_manifest_paths(setup_delivery):
+    delivery, fake, output, reports, _ = setup_delivery
+    delivery.subdirectories = {r['filename']:Path(r['filename']).stem for r in reports}
+    delivery.deliver(output, reports)
+    for report in reports:
+        name = report['filename']
+        assert fake.files['\\Work\\Тест\\'+Path(name).stem+'\\'+name] == (output/'current'/name).read_bytes()
+        assert '\\Work\\Тест\\'+name not in fake.files
+    remote = json.loads(fake.files['\\Work\\Тест\\manifest.json'])
+    assert [e['file'] for e in remote['reports']] == ['Первый/Первый.csv','Второй/Второй.csv']
+    assert [e['file'] for e in json.loads((output/'current/manifest.json').read_text())['reports']] == ['Первый.csv','Второй.csv']
+
+
+@pytest.mark.parametrize('folder', ['..', '../other', 'x\\y', 'x;del *', 'x:y'])
+def test_invalid_subdirectory_is_rejected(folder):
+    with pytest.raises(ExportError):
+        SmbDelivery({'share':'//server.invalid/share','directory':'Work','report_subdirectories':{'report.csv':folder}})
+
+
 def test_corrupt_upload_does_not_replace_any_report(setup_delivery):
     delivery, fake, output, reports, _ = setup_delivery
     fake.corrupt_upload = True

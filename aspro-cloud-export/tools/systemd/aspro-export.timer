@@ -1,8 +1,8 @@
 [Unit]
-Description=Aspro.Cloud export at 07:45 Moscow time
+Description=Aspro.Cloud export at 07:30 Moscow time
 
 [Timer]
-OnCalendar=*-*-* 07:45:00 Europe/Moscow
+OnCalendar=*-*-* 07:30:00 Europe/Moscow
 AccuracySec=1s
 RandomizedDelaySec=0
 Persistent=true

@@ -126,7 +126,7 @@ E-mail сохраняет исходный текст; удаляются BOM, �
 
 На текущем Debian-сервере приложение установлено в
 `/home/aspro/aspro-cloud-export`, окружение — `.venv`. Пользовательский таймер
-`aspro-export.timer` запускает `aspro-export.service` ежедневно в **01:00
+`aspro-export.timer` запускает `aspro-export.service` ежедневно в **07:45
 Europe/Moscow**. Включён linger: запуск не зависит от открытого SSH-сеанса.
 Unit-файлы находятся в `~/.config/systemd/user/`; их исходники для установки
 сохранены в `tools/systemd/`.
@@ -159,11 +159,11 @@ systemctl --user list-timers aspro-delivery.timer --no-pager
 Таймер с `Persistent=true` также выполняет пропущенный запуск после включения
 сервера. Не включайте cron одновременно с таймером.
 
-Для 01:00 по Москве сервер должен работать в Europe/Moscow (`timedatectl`).
+Для 07:45 по Москве сервер должен работать в Europe/Moscow (`timedatectl`).
 Если вместо таймера выбран cron, в crontab пользователя сервиса, с фактическими путями:
 
 ```cron
-0 1 * * * /путь/к/.venv/bin/python /путь/к/export_aspro.py >> /путь/к/export.log 2>&1
+45 7 * * * /путь/к/.venv/bin/python /путь/к/export_aspro.py >> /путь/к/export.log 2>&1
 ```
 
 Для cron настройте права и ротацию журнала. Cron не включён: используется таймер

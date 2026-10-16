@@ -64,6 +64,35 @@ def test_invalid_or_incomplete_pages_are_rejected(responses):
         list(api.records("crm/account/list"))
 
 
+def test_stable_id_boundary_excludes_new_records_from_later_pages():
+    api, session, _ = client([page(1,[{'id':101},{'id':100}],101),
+                              page(1,[{'id':n} for n in range(1,101)],101),
+                              page(2,[{'id':101}],101)])
+    api.stable_ids = True
+    rows=list(api.records('crm/account/list',{'order_by[asc][]':'id','filter[type]':'1'}))
+    assert len(rows)==101
+    assert session.calls[0][1]['params']['order_by[desc][]']=='id'
+    assert 'order_by[asc][]' not in session.calls[0][1]['params']
+    import json
+    for _,call in session.calls[1:]:
+        assert json.loads(call['params']['filter[id]'])=={'type':'less','value':102}
+        assert call['params']['filter[type]']=='1'
+
+
+def test_stable_id_filter_must_be_enforced_by_api():
+    api, _, _ = client([page(1,[{'id':5},{'id':4}],5),page(1,[{'id':6}],1)])
+    api.stable_ids=True
+    with pytest.raises(ExportError,match='ignored stable ID'):
+        list(api.records('crm/lead/list',{'order_by[asc][]':'id'}))
+
+
+def test_stable_id_probe_rejects_ignored_descending_sort():
+    api, _, _ = client([page(1,[{'id':1},{'id':2}],5)])
+    api.stable_ids=True
+    with pytest.raises(ExportError,match='ignored descending'):
+        list(api.records('crm/lead/list',{'order_by[asc][]':'id'}))
+
+
 def test_empty_page():
     api, _, _ = client([page(1, [], 0)])
     assert list(api.records("crm/account/list")) == []

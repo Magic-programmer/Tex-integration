@@ -56,7 +56,7 @@ def transient_tls_eof(error):
 
 class ApiClient:
     def __init__(self, base_url, api_key, *, interval=1.1, attempts=4,
-                 session=None, sleep=time.sleep, clock=time.monotonic):
+                 session=None, sleep=time.sleep, clock=time.monotonic, stable_ids=False):
         parsed = urlparse(base_url)
         if (parsed.scheme != "https" or not parsed.hostname or
                 parsed.username or parsed.password or parsed.query or parsed.fragment or
@@ -72,6 +72,7 @@ class ApiClient:
         self.session = session or requests.Session()
         self.sleep, self.clock = sleep, clock
         self.last_request = None
+        self.stable_ids = stable_ids
 
     def _wait(self):
         if self.last_request is not None:
@@ -149,6 +150,27 @@ class ApiClient:
         params = dict(params or {})
         if "page" in params or "limit" in params or "api_key" in params:
             raise ExportError("Pagination and authentication are managed by the client")
+        upper_id = None
+        mutable = {'crm/account/list', 'crm/lead/list', 'crm/emails/list',
+                   'task/tasks/list', 'customlists/lists/3/items'}
+        if self.stable_ids and path in mutable:
+            if params.get('order_by[asc][]') != 'id' or 'filter[id]' in params:
+                raise ExportError("Stable export requires ascending IDs and no existing ID filter")
+            probe_params = {k:v for k,v in params.items() if not k.startswith('order_by[')}
+            probe = self.get(path, {**probe_params, 'order_by[desc][]':'id',
+                                   'fields':'id', 'limit':2, 'page':1})
+            latest = probe.get('items')
+            total = probe.get('total_result')
+            if (not isinstance(latest, list) or type(total) is not int or total < 0 or
+                    len(latest) != min(2, total) or probe.get('page') != 1 or
+                    probe.get('count') != len(latest) or
+                    any(not isinstance(r,dict) or not str(r.get('id')).isdigit() for r in latest)):
+                raise ExportError("Invalid stable ID boundary metadata")
+            ids = [int(r['id']) for r in latest]
+            if len(ids) == 2 and ids[0] <= ids[1]:
+                raise ExportError("API ignored descending ID ordering")
+            upper_id = ids[0] if ids else 0
+            params['filter[id]'] = json.dumps({'type':'less', 'value':upper_id + 1})
         seen, expected, page = set(), None, 1
         while True:
             result = self.get(path, {**params, "page": page, "limit": 100})
@@ -173,6 +195,8 @@ class ApiClient:
                 if not isinstance(item, dict) or item.get("id") is None:
                     raise ExportError("Record identifier is missing")
                 identifier = str(item["id"])
+                if upper_id is not None and (not identifier.isdigit() or int(identifier) > upper_id):
+                    raise ExportError("API ignored stable ID boundary")
                 if identifier in seen:
                     raise ExportError("Duplicate record across API pages")
                 seen.add(identifier)
@@ -580,6 +604,8 @@ class SmbDelivery:
         return smb_quote(self.directory + ('\\' + folder if folder else '') + '\\' + name)
 
     def command(self, command, *, attempts=3):
+        operation = command.split()[0]
+        reason = 'UNKNOWN'
         args = ['smbclient', self.share, '-A', str(self.credentials),
                 '--option=client min protocol=SMB3', '--client-protection=encrypt',
                 '-t', '30', '-c', command]
@@ -587,14 +613,19 @@ class SmbDelivery:
             try:
                 result = self.execute(args, capture_output=True, timeout=180)
                 success = result.returncode == 0 and b'NT_STATUS_' not in result.stdout + result.stderr
-            except (OSError, subprocess.TimeoutExpired):
+                codes = re.findall(rb'NT_STATUS_[A-Z0-9_]+', result.stdout + result.stderr)
+                reason = codes[0].decode('ascii') if codes else 'EXIT_' + str(result.returncode)
+            except subprocess.TimeoutExpired:
+                success, reason = False, 'TIMEOUT'
+            except OSError:
                 success = False
+                reason = 'EXECUTION_ERROR'
             if success:
                 return
             if attempt + 1 < attempts:
-                log.warning("Temporary SMB operation failure; retry %d/%d", attempt + 1, attempts)
+                log.warning("SMB %s failed (%s); retry %d/%d", operation, reason, attempt + 1, attempts)
                 self.sleep(2 ** attempt)
-        raise ExportError("SMB operation failed; destination may contain the previous or mixed generations; retry delivery")
+        raise ExportError("SMB " + operation + " failed (" + reason + "); destination may contain the previous or mixed generations; retry delivery")
 
     def deliver(self, output, reports):
         info = self.credentials.stat()
@@ -658,6 +689,37 @@ class SmbDelivery:
                         pass  # Already renamed, or unavailable; never delete final files.
 
 
+def delivery_signature(config, output):
+    value = {'manifest': sha256_file(Path(output)/'current/manifest.json'),
+             'destination': config.get('delivery')}
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
+def delivery_completed(config, output):
+    try:
+        state = json.loads((Path(output)/'.delivery-completed.json').read_text())
+        return state.get('signature') == delivery_signature(config, output)
+    except (OSError, ValueError, TypeError, AttributeError):
+        return False
+
+
+def record_delivery(config, output):
+    state = {'signature': delivery_signature(config, output),
+             'completed_utc': datetime.now(timezone.utc).isoformat()}
+    target = Path(output)/'.delivery-completed.json'
+    temporary = target.with_name('.delivery-' + uuid.uuid4().hex + '.tmp')
+    try:
+        with temporary.open('x', encoding='utf-8') as handle:
+            os.chmod(temporary, 0o600)
+            json.dump(state, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+        fsync_directory(output)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def api_key():
     key = os.environ.get("ASPRO_API_KEY")
     if key:
@@ -677,6 +739,7 @@ def main():
     parser.add_argument("--report", action="append", help="Select a report by configuration name")
     parser.add_argument("--check-config", action="store_true")
     parser.add_argument("--deliver-only", action="store_true", help="Deliver the existing complete snapshot without API requests")
+    parser.add_argument("--deliver-pending", action="store_true", help="Retry only a snapshot not yet delivered; never access API")
     args = parser.parse_args()
     os.umask(0o077)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -688,7 +751,7 @@ def main():
         delivery = SmbDelivery(config['delivery']) if config.get('delivery') else None
         if delivery and args.report:
             raise ExportError("Select individual reports only with a configuration without Windows delivery")
-        if args.deliver_only and not delivery:
+        if (args.deliver_only or args.deliver_pending) and not delivery:
             raise ExportError("Windows delivery is not configured")
         if args.check_config:
             log.info("Configuration valid: %d reports", len(reports))
@@ -699,17 +762,29 @@ def main():
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
+                if args.deliver_pending:
+                    log.info("Export is running; pending delivery deferred")
+                    return 0
                 raise ExportError("Another export is running") from None
-            if not args.deliver_only:
+            if args.deliver_pending:
+                if not (output/'current/manifest.json').exists():
+                    log.info("No completed snapshot to deliver")
+                    return 0
+                if delivery_completed(config, output):
+                    log.info("Current snapshot was already delivered")
+                    return 0
+            if not (args.deliver_only or args.deliver_pending):
                 client = ApiClient(os.environ.get("ASPRO_BASE_URL", config.get("base_url", "")),
                                    api_key(),
-                                   interval=float(os.environ.get("ASPRO_REQUEST_INTERVAL", "1.1")))
+                                   interval=float(os.environ.get("ASPRO_REQUEST_INTERVAL", "1.1")),
+                                   stable_ids=True)
                 try:
                     run(config, reports, output, client)
                 finally:
                     client.session.close()
             if delivery:
                 delivery.deliver(output, reports)
+                record_delivery(config, output)
             else:
                 log.info("Windows delivery is not configured")
         return 0

@@ -186,6 +186,48 @@ def test_default_run_reports_delivery_failure(setup_delivery, monkeypatch, tmp_p
     assert '\\Work\\Тест\\manifest.json' not in fake.files
 
 
+def test_pending_delivery_retries_without_api_and_skips_after_success(setup_delivery, monkeypatch, tmp_path):
+    import export_aspro
+    delivery, fake, output, reports, _ = setup_delivery
+    for report in reports:
+        report.update({'path':'crm/account/list'})
+        report['columns'][0]['field'] = 'id'
+    config = tmp_path/'config.json'
+    config.write_text(json.dumps({'reports':reports,'delivery':{'share':'//server.invalid/reports','directory':'Work/Тест'}}))
+    monkeypatch.setattr(export_aspro, 'SmbDelivery', lambda settings:delivery)
+    monkeypatch.setattr(export_aspro, 'ApiClient', lambda *a, **k:pytest.fail('Retry must not access API'))
+    monkeypatch.setattr('sys.argv', ['export_aspro.py','--config',str(config),'--output',str(output),'--deliver-pending'])
+    fake.fail_rename = True
+    assert export_aspro.main() == 1
+    assert not (output/'.delivery-completed.json').exists()
+    fake.fail_rename = False
+    assert export_aspro.main() == 0
+    assert (output/'.delivery-completed.json').stat().st_mode & 0o777 == 0o600
+    previous_calls = len(fake.commands)
+    assert export_aspro.main() == 0
+    assert len(fake.commands) == previous_calls
+
+
+def test_delivery_marker_is_invalidated_by_destination_or_manifest(setup_delivery):
+    from export_aspro import delivery_completed, record_delivery
+    _, _, output, _, _ = setup_delivery
+    config = {'delivery':{'share':'//server.invalid/reports','directory':'Work'}}
+    record_delivery(config, output)
+    assert delivery_completed(config, output)
+    assert not delivery_completed({'delivery':{'share':'//server.invalid/other','directory':'Work'}}, output)
+    manifest = output/'current/manifest.json'
+    manifest.write_text(manifest.read_text()+'\n')
+    assert not delivery_completed(config, output)
+
+
+def test_smb_failure_exposes_status_but_never_raw_response(setup_delivery):
+    delivery, _, _, _, _ = setup_delivery
+    delivery.execute = lambda args, **kwargs:subprocess.CompletedProcess(args,1,b'NT_STATUS_ACCESS_DENIED private-response-must-not-leak',b'')
+    with pytest.raises(ExportError, match='NT_STATUS_ACCESS_DENIED') as error:
+        delivery.command('put "local" "remote"', attempts=1)
+    assert 'private-response' not in str(error.value)
+
+
 @pytest.mark.parametrize('value', ['x;del *', 'x"y', 'x\ny'])
 def test_smb_command_injection_rejected(value):
     with pytest.raises(ExportError):

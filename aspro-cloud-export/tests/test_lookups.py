@@ -75,3 +75,21 @@ def test_email_list_cleanup_preserves_readable_original_values():
     assert join_labels([' INFO@EXAMPLE.INVALID ', '', '\ufeffinfo@example.invalid',
                         'INFO@EXAMPLE.INVALID', "'quoted@example.invalid'", '<bad@value>'], spec) == (
         "INFO@EXAMPLE.INVALID, info@example.invalid, 'quoted@example.invalid', <bad@value>")
+def test_gpu_orders_use_live_projects_and_fetch_new_project_once():
+    import json
+    from pathlib import Path
+    from export_aspro import LookupTable, transform
+    config=json.loads((Path(__file__).resolve().parents[1]/'reports.json').read_text())
+    column=next(c for r in config['reports'] for c in r['columns'] if c['header']=='Заказ ТЕХ')
+    assert column['transform']=='lookup' and column['lookup']=='projects'
+    assert 'values' not in column
+    class Client:
+        calls=[]
+        def get(self,path):
+            self.calls.append(path)
+            return {'id':178,'name':'Synthetic new order'}
+    client=Client()
+    projects=LookupTable({},client,config['lookups']['projects'])
+    for _ in range(2):
+        assert transform({'cf_14':'178'},column,{'projects':projects})=='Synthetic new order'
+    assert client.calls==['st/projects/get/178']

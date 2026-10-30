@@ -35,6 +35,10 @@ class ApiApplicationError(ExportError):
     """An explicit API error envelope, distinct from transport/schema failures."""
 
 
+class ApiModuleAccessError(ApiApplicationError):
+    """The key explicitly lacks permission for this module (API code 22)."""
+
+
 def transient_tls_eof(error):
     """Inspect exception types only; never stringify URLs or credentials."""
     pending, seen, eof = [error], set(), False
@@ -139,7 +143,7 @@ class ApiClient:
                 if (isinstance(error, dict) and error.get("error_code") == 22 and
                         str(error.get("error_msg", "")).strip().lower().rstrip(".") ==
                         "apikey has not been granted to the module"):
-                    raise ApiApplicationError("API key is not granted access to this module (code 22)")
+                    raise ApiModuleAccessError("API key is not granted access to this module (code 22)")
                 raise ApiApplicationError("API returned an application error")
             result = data.get("response")
             if not isinstance(result, dict):
@@ -227,20 +231,29 @@ class LookupTable(dict):
     def __init__(self, values, client, spec):
         super().__init__(values)
         self.client, self.spec = client, spec
+        self.fallback_labels = {}
 
     def __getitem__(self, identifier):
         value = super().__getitem__(identifier)
         if (value is None or value == "") and self.spec.get("unavailable_label") == "id":
+            if self.spec.get('get_path'):
+                return self.__missing__(identifier)
+            if identifier in self.fallback_labels:
+                return self._historical_label(identifier)
             return self._original_id(identifier)
         return value
 
     def __missing__(self, identifier):
         path = self.spec.get("get_path")
         if not path:
+            if identifier in self.fallback_labels:
+                return self._historical_label(identifier)
             raise KeyError(identifier)
         try:
             record = self.client.get(path.format(id=identifier))
         except ApiApplicationError:
+            if identifier in self.fallback_labels:
+                return self._historical_label(identifier)
             if self.spec.get("unavailable_label") != "id":
                 raise
             return self._original_id(identifier)
@@ -249,10 +262,18 @@ class LookupTable(dict):
             raise ExportError("Individual lookup returned an invalid related record")
         value = record[label]
         if value is None or value == "":
+            if identifier in self.fallback_labels:
+                return self._historical_label(identifier)
             if self.spec.get("unavailable_label") == "id":
                 return self._original_id(identifier)
             raise ExportError("Individual lookup label is unavailable")
         self[identifier] = value
+        return value
+
+    def _historical_label(self, identifier):
+        value = self.fallback_labels[identifier]
+        self[identifier] = value
+        log.warning('Historical related label used after live lookup was unavailable (value omitted)')
         return value
 
     def _original_id(self, identifier):
@@ -431,7 +452,10 @@ def transform(record, column, lookups):
                 return ""
             raise ExportError("Missing related record for column: " + column["header"]) from None
     elif kind in ("enum", "reference_labels"):
-        values = column["values"]
+        values = dict(column["values"])
+        field_id = column.get('live_options_field_id')
+        if field_id is not None:
+            values.update(lookups.get('field_options', {}).get(str(field_id), {}))
         if str(value) not in values:
             raise ExportError("Unknown enum value or reference ID for column: " + column["header"])
         value = values[str(value)]
@@ -500,9 +524,36 @@ def validate_config(config, selected):
     return reports
 
 
+def load_live_options(config, reports, client):
+    fields = {str(c['live_options_field_id']) for r in reports for c in r['columns']
+              if 'live_options_field_id' in c}
+    settings = config.get('live_options')
+    if not fields or not settings:
+        return {}
+    if any(not field.isdigit() for field in fields):
+        raise ExportError('Invalid live option field ID')
+    params = {**settings.get('params', {}), 'filter[field_id]': ','.join(sorted(fields, key=int)),
+              'fields': 'id,field_id,value'}
+    labels = {}
+    try:
+        for item in client.records(settings['path'], params):
+            field, identifier = str(item.get('field_id')), str(item.get('id'))
+            if field not in fields or not identifier.isdigit() or not isinstance(item.get('value'), str):
+                raise ExportError('Invalid live custom-field option')
+            values = labels.setdefault(field, {})
+            if identifier in values:
+                raise ExportError('Duplicate live custom-field option')
+            values[identifier] = item['value']
+    except ApiModuleAccessError:
+        log.warning('Live custom-field options unavailable: module access denied; configured fallback labels used')
+        return {}
+    log.info('Live custom-field options loaded: %d labels', sum(map(len, labels.values())))
+    return labels
+
+
 def run(config, reports, output, client):
     needed = {c["lookup"] for r in reports for c in r["columns"] if "lookup" in c}
-    lookups = {}
+    lookups = {'field_options': load_live_options(config, reports, client)}
     for name in sorted(needed):
         spec = config["lookups"][name]
         table = {}
@@ -528,18 +579,14 @@ def run(config, reports, output, client):
                     not str(k).isdigit() or not isinstance(v, str) or not v
                     for k, v in supplemental.items()):
                 raise ExportError("Invalid supplemental user labels")
-            for identifier, label in supplemental.items():
-                if not table.get(identifier):
-                    lookups[name][identifier] = label
+            lookups[name].fallback_labels.update(supplemental)
         account_labels = Path(os.environ.get("ASPRO_ACCOUNT_LABELS_FILE", str(Path.home()/".config/aspro-export/account-labels.json")))
         if name == "accounts" and account_labels.exists():
             supplemental = json.loads(account_labels.read_text())
             if not isinstance(supplemental, dict) or any(
                     not str(k).isdigit() or not isinstance(v, str) for k, v in supplemental.items()):
                 raise ExportError("Invalid supplemental account labels")
-            for identifier, label in supplemental.items():
-                if identifier not in table:
-                    lookups[name][identifier] = label
+            lookups[name].fallback_labels.update(supplemental)
         log.info("Lookup %s loaded: %d records", name, len(table))
     snapshot = Snapshot(output)
     try:
